@@ -93,6 +93,11 @@ def _register_builtins() -> None:
         _ENV_REGISTRY["swebench"] = SWEBenchAdapter
     except ImportError:
         pass
+    try:
+        from skillopt.envs.doc_quality_kr.adapter import DocQualityKRAdapter
+        _ENV_REGISTRY["doc_quality_kr"] = DocQualityKRAdapter
+    except ImportError:
+        pass
 
 
 def get_adapter(cfg: dict):

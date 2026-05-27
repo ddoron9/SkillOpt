@@ -1,0 +1,16 @@
+[
+  {
+    "id": "example-001",
+    "task_type": "tutorial",
+    "instruction": "신규 입사자에게 우리 팀의 PR 리뷰 절차를 안내하는 온보딩 가이드를 작성해줘.",
+    "audience": "신규 입사자",
+    "doc_type": "온보딩 가이드",
+    "style_hints": "각 단계는 동사로 시작. 명령은 코드 블록으로.",
+    "context": "팀에서는 GitHub PR을 만든 뒤 최소 1명의 동료 리뷰가 필요하다. CI가 통과해야 머지가 가능하고, main 브랜치에 직접 push는 금지되어 있다. 리뷰 코멘트는 24시간 안에 응답한다.",
+    "reference_doc": "# PR 리뷰 절차\n\n신규 입사자라면 첫 PR을 올리기 전에 이 문서를 한 번 읽고 시작합니다.\n\n## 1. 브랜치 만들기\n```\ngit checkout -b feat/your-feature\n```\nmain에 직접 push할 수 없습니다.\n\n## 2. PR 올리기\n- 제목 한 줄로 변경의 의도를 적습니다.\n- 본문에 어떤 시나리오에서 동작하는지 1~2줄로 적습니다.\n- 리뷰어 한 명 이상을 지정합니다.\n\n## 3. CI 통과 확인\nGitHub Actions가 모두 초록불이어야 머지할 수 있습니다.\n\n## 4. 리뷰 응답\n리뷰 코멘트에는 24시간 안에 답합니다. 의견이 갈리는 부분은 슬랙이 아니라 PR 코멘트에 남깁니다.\n\n## 5. 머지\n리뷰 승인과 CI 통과를 모두 받았다면 본인이 직접 squash merge합니다.\n",
+    "reference_meta": {
+      "source": "manual",
+      "title": "PR 리뷰 절차"
+    }
+  }
+]
