@@ -103,6 +103,8 @@ See `skillopt/envs/<benchmark>/dataloader.py` for the exact format each benchmar
 | LiveMathematicianBench | Math | `configs/livemathematicianbench/default.yaml` |
 | SpreadsheetBench | Code generation | `configs/spreadsheetbench/default.yaml` |
 | OfficeQA | Tool-augmented QA | `configs/officeqa/default.yaml` |
+| doc_quality_kr | Korean technical writing (Claude CLI, no API key) | `configs/doc_quality_kr/default.yaml` |
+| code_quality_kr | Code change quality (Claude Code CLI, no API key) | `configs/code_quality_kr/default.yaml` |
 
 ---
 

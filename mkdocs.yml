@@ -50,6 +50,9 @@ nav:
   - Extension Guides:
     - Add a New Benchmark: guide/new-benchmark.md
     - Add a New Model Backend: guide/new-backend.md
+  - Recipes:
+    - Korean Doc Quality (Claude CLI): guide/doc-quality-kr.md
+    - Korean Code Quality (Claude Code CLI): guide/code-quality-kr.md
   - Reference:
     - Configuration Reference: reference/config.md
     - CLI Reference: reference/cli.md

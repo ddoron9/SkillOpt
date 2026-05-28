@@ -1,0 +1,19 @@
+[
+  {
+    "id": "example-code-001",
+    "task_type": "refactor",
+    "instruction": "user_service.py의 fetch_user 함수에서 user_id가 None일 때 ValueError를 던지도록 가드 절을 추가해줘. 기존 동작은 그대로 두고 가드만 맨 앞에 한 줄로.",
+    "style_hints": "가드 절은 함수 맨 위 한 줄. 메시지는 영문.",
+    "context_files": [
+      {
+        "path": "user_service.py",
+        "content": "def fetch_user(user_id):\n    row = db.query(\"SELECT * FROM users WHERE id = %s\", user_id)\n    return row.first()\n"
+      }
+    ],
+    "reference_diff": "--- a/user_service.py\n+++ b/user_service.py\n@@\n def fetch_user(user_id):\n+    if user_id is None:\n+        raise ValueError(\"user_id must not be None\")\n     row = db.query(\"SELECT * FROM users WHERE id = %s\", user_id)\n     return row.first()\n",
+    "reference_meta": {
+      "source": "manual",
+      "title": "user_service guard clause"
+    }
+  }
+]
