@@ -1,0 +1,56 @@
+_base_: ../_base_/default.yaml
+
+# Code quality skill. Optimizer + judge run through Claude CLI
+# (`claude_chat`); target uses Claude Code CLI (`claude_code_exec`) so the
+# agent can actually edit files in a sandboxed workspace.
+
+model:
+  backend: claude_code_exec
+  optimizer_backend: claude_chat
+  target_backend: claude_code_exec
+  optimizer: claude-opus-4-7
+  target: claude-sonnet-4-6
+  reasoning_effort: medium
+  claude_code_exec_effort: medium
+  claude_code_exec_max_thinking_tokens: 16384
+
+train:
+  num_epochs: 3
+  train_size: 0
+  batch_size: 6
+  accumulation: 1
+  seed: 42
+
+gradient:
+  minibatch_size: 4
+  merge_batch_size: 4
+  analyst_workers: 4
+  max_analyst_rounds: 2
+  failure_only: false
+
+optimizer:
+  learning_rate: 4
+  min_learning_rate: 2
+  lr_scheduler: cosine
+  skill_update_mode: patch
+  use_slow_update: true
+  slow_update_samples: 8
+  use_meta_skill: true
+
+evaluation:
+  use_gate: true
+  sel_env_num: 0
+  test_env_num: 0
+  eval_test: true
+
+env:
+  name: code_quality_kr
+  skill_init: skillopt/envs/code_quality_kr/skills/initial.md
+  split_mode: split_dir
+  split_dir: data/code_quality_kr_split
+  data_path: ""
+  workers: 2
+  exec_timeout: 600
+  judge_model: claude-opus-4-7
+  pass_threshold: 0.7
+  limit: 0
