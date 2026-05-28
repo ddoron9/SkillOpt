@@ -40,26 +40,74 @@ JSON 배열의 각 원소가 하나의 학습/평가 과제입니다.
 
 ## 채우는 흐름
 
-1. `scripts/ingest_confluence.py` 입력 JSON 작성:
-   ```json
-   [
-     {"page_id": "1234567",
-      "audience": "신규 입사자",
-      "doc_type": "온보딩 가이드"},
-     {"url": "https://yourcompany.atlassian.net/wiki/spaces/ENG/pages/2345/Foo"}
-   ]
-   ```
-2. 인제스트 실행:
-   ```
-   export CONFLUENCE_URL="https://yourcompany.atlassian.net/wiki"
-   export CONFLUENCE_USER="you@yourcompany.com"
-   export CONFLUENCE_TOKEN="atatt..."
-   python scripts/ingest_confluence.py \
-       --input pages.json \
-       --out_dir data/doc_quality_kr_split \
-       --split_ratio 7:1:2
-   ```
-3. 결과 확인: `data/doc_quality_kr_split/{train,val,test}/items.json` 생성됨.
+자격증명 export 후 두 모드 중 하나로 ingest 실행합니다.
+
+### 모드 A — 본인이 작성한 페이지 자동 수집 (권장)
+
+```bash
+export CONFLUENCE_URL="https://yourcompany.atlassian.net/wiki"
+export CONFLUENCE_USER="you@yourcompany.com"
+export CONFLUENCE_TOKEN="atatt..."     # https://id.atlassian.com/manage-profile/security/api-tokens
+
+python scripts/ingest_confluence.py \
+    --search-current-user-pages \
+    --max-pages 16 \
+    --redact \
+    --out_dir data/doc_quality_kr_split \
+    --split_ratio 7:1:2
+```
+
+CQL `creator = currentUser()` 로 본인이 작성한 페이지를 최근 수정순으로 가져옵니다.
+
+### 모드 B — 페이지 ID/URL 직접 지정
+
+`pages.json` 작성:
+```json
+[
+  {"page_id": "1234567",
+   "audience": "신규 입사자",
+   "doc_type": "온보딩 가이드"},
+  {"url": "https://yourcompany.atlassian.net/wiki/spaces/ENG/pages/2345/Foo"}
+]
+```
+
+실행:
+```bash
+python scripts/ingest_confluence.py \
+    --input pages.json \
+    --redact \
+    --out_dir data/doc_quality_kr_split \
+    --split_ratio 7:1:2
+```
+
+### 비식별화
+
+`--redact` (기본 켜짐)는 `scripts/redact.py`의 패턴 기반 치환을 적용합니다.
+
+| 카테고리 | 원본 예시 | 치환 결과 |
+|---|---|---|
+| 고객사명 | 현대중공업, 삼성증권 | `고객사1`, `고객사2` (등장 순) |
+| 동료 이름 | 이지훈, 김도이 | `동료1`, `동료2` |
+| 내부 IP | 192.168.10.81 | `내부서버1` |
+| 내부 git 조직 | crowdworks_dev | `<ORG_GIT>` |
+| 사내 도메인 | crowdworksinc.atlassian.net | `<COMPANY>.atlassian.net` |
+| 내부 시스템 | knowledge_compiler, kc-backend | `<INTERNAL_SYS>` |
+| 티켓 ID | KCP-960, FA-903 | `TICKET-1`, `TICKET-2` |
+| 이메일 / 전화 | foo@bar.com / 010-1234-5678 | `이메일1` / `전화1` |
+| 아바타 URL / 내부 smartlink | (긴 URL) | 제거 / `<내부링크>` |
+
+매핑 결과는 `data/doc_quality_kr_split/redaction_mapping.json`에 저장되어
+필요하면 사람이 검토할 수 있습니다. 새 식별자가 발견되면
+`scripts/redact.py`의 `CUSTOMER_NAMES`, `COWORKER_NAMES`, `INTERNAL_*`
+리스트에 추가하면 됩니다.
+
+치환 후 한 번 더 leakage 패턴(`scan_for_leakage`)으로 결과를 재검사하고,
+하나라도 남아 있으면 split을 쓰지 않고 중단합니다. 그래도 강행하려면
+`--allow-leakage`를 추가하세요.
+
+### 결과 확인 + 학습
+
+3. 결과: `data/doc_quality_kr_split/{train,val,test}/items.json` 생성.
 4. 학습: `bash scripts/run_doc_quality_kr.sh`
 
 ## 수동으로 만들고 싶다면

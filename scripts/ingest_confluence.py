@@ -19,26 +19,37 @@ Usage
        export CONFLUENCE_USER="you@yourcompany.com"
        export CONFLUENCE_TOKEN="atatt..."     # https://id.atlassian.com/manage-profile/security/api-tokens
 
-3. Prepare a JSON file listing the pages to fetch. Each entry can be a page
-   id or a page URL, and may carry extra metadata that overrides the auto
-   derived fields::
+3. Pick one of the two input modes:
 
-       [
-         {"page_id": "1234567",
-          "instruction": "신규 입사자에게 우리 팀 배포 절차를 안내하는 문서를 작성해줘.",
-          "audience": "신규 입사자",
-          "doc_type": "온보딩 가이드"},
-         {"url": "https://yourcompany.atlassian.net/wiki/spaces/ENG/pages/2345/Foo"}
-       ]
+   a) ``--search-current-user-pages`` — auto-discover pages you authored.
+      No input JSON required::
 
-4. Run::
+          python scripts/ingest_confluence.py \\
+              --search-current-user-pages \\
+              --redact \\
+              --max-pages 16 \\
+              --out_dir data/doc_quality_kr_split \\
+              --split_ratio 7:1:2
 
-       python scripts/ingest_confluence.py \\
-           --input pages.json \\
-           --out_dir data/doc_quality_kr_split \\
-           --split_ratio 7:1:2
+   b) ``--input pages.json`` — explicit list of page ids / URLs::
+
+          [
+            {"page_id": "1234567",
+             "instruction": "신규 입사자에게 우리 팀 배포 절차를 안내하는 문서를 작성해줘.",
+             "audience": "신규 입사자",
+             "doc_type": "온보딩 가이드"},
+            {"url": "https://yourcompany.atlassian.net/wiki/spaces/ENG/pages/2345/Foo"}
+          ]
 
 The script writes ``data/doc_quality_kr_split/{train,val,test}/items.json``.
+
+Redaction
+---------
+``--redact`` runs the pattern-based redactor in ``scripts/redact.py`` over
+each fetched page body and metadata block. Customer / coworker / IP / email
+/ ticket / internal-host identifiers are replaced with stable placeholders
+(고객사1, 동료1, 내부서버1, …). After writing, the script re-scans the
+output for known leakage patterns and aborts if anything is still present.
 """
 from __future__ import annotations
 
@@ -50,6 +61,11 @@ import re
 import sys
 from typing import Any
 from urllib.parse import urlparse
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+import redact as redact_mod  # noqa: E402
 
 
 # ── Small helpers (no hard dep until ingest runs) ────────────────────────────
@@ -120,6 +136,7 @@ def _build_item(
     confluence: Any,
     entry: dict,
     include_html: bool,
+    redact_state: "redact_mod.RedactionState | None" = None,
 ) -> dict:
     page_id = _resolve_page_id(entry)
     page = confluence.get_page_by_id(
@@ -143,6 +160,23 @@ def _build_item(
         audience=audience,
     )
 
+    meta = {
+        "source": "confluence",
+        "page_id": page_id,
+        "title": title,
+        "space_key": (page.get("space") or {}).get("key", ""),
+        "version": (page.get("version") or {}).get("number"),
+        "url": entry.get("url", ""),
+    }
+
+    if redact_state is not None:
+        reference_doc = redact_mod.redact(reference_doc, redact_state)
+        instruction = redact_mod.redact(instruction, redact_state)
+        title = redact_mod.redact(title, redact_state)
+        meta["title"] = title
+        meta = redact_mod.redact_meta(meta, redact_state)
+        meta["redacted"] = True
+
     item = {
         "id": entry.get("custom_id") or f"confluence-{page_id}",
         "task_type": entry.get("task_type") or "doc",
@@ -152,17 +186,18 @@ def _build_item(
         "style_hints": entry.get("style_hints", ""),
         "context": entry.get("context", ""),
         "reference_doc": reference_doc,
-        "reference_meta": {
-            "source": "confluence",
-            "page_id": page_id,
-            "title": title,
-            "space_key": (page.get("space") or {}).get("key", ""),
-            "version": (page.get("version") or {}).get("number"),
-            "url": entry.get("url", ""),
-        },
+        "reference_meta": meta,
     }
     if include_html:
-        item["reference_meta"]["html_storage"] = html_body
+        # When redaction is on, do NOT keep raw HTML — it would leak everything
+        # the redactor just removed from the markdown body.
+        if redact_state is None:
+            item["reference_meta"]["html_storage"] = html_body
+        else:
+            print(
+                f"  [warn] dropping --include_html for {page_id}: redaction is on",
+                file=sys.stderr,
+            )
     return item
 
 
@@ -219,13 +254,67 @@ def _write_split(out_dir: str, items: list[dict], split_ratio: str, seed: int) -
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
 
+def _discover_current_user_pages(client: Any, max_pages: int) -> list[dict]:
+    """Return page entries authored by the authenticated user via CQL."""
+    cql = "creator = currentUser() AND type = page ORDER BY lastmodified DESC"
+    result = client.cql(cql, limit=max_pages)
+    entries: list[dict] = []
+    for hit in (result.get("results") or [])[:max_pages]:
+        content = hit.get("content") or {}
+        page_id = str(content.get("id") or "").strip()
+        if not page_id:
+            continue
+        entries.append({
+            "page_id": page_id,
+            "title": content.get("title") or "",
+        })
+    return entries
+
+
+def _scan_split_for_leakage(out_dir: str) -> dict[str, list[tuple[str, str]]]:
+    """Walk the written split files and report any remaining leak patterns."""
+    findings: dict[str, list[tuple[str, str]]] = {}
+    for name in ("train", "val", "test"):
+        items_path = os.path.join(out_dir, name, "items.json")
+        if not os.path.isfile(items_path):
+            continue
+        with open(items_path, encoding="utf-8") as f:
+            payload = json.load(f)
+        text = json.dumps(payload, ensure_ascii=False)
+        hits = redact_mod.scan_for_leakage(text)
+        if hits:
+            findings[name] = hits
+    return findings
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--input", required=True, help="Path to JSON file listing Confluence pages")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--input", help="Path to JSON file listing Confluence pages")
+    source.add_argument(
+        "--search-current-user-pages",
+        dest="search_current_user_pages",
+        action="store_true",
+        help="Auto-discover pages authored by the authenticated user via CQL",
+    )
     parser.add_argument("--out_dir", required=True, help="Output split directory")
     parser.add_argument("--split_ratio", default="7:1:2", help="train:val:test ratio (default: 7:1:2)")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--include_html", action="store_true", help="Also store raw storage HTML for debugging")
+    parser.add_argument("--max-pages", dest="max_pages", type=int, default=50,
+                        help="Cap for --search-current-user-pages (default: 50)")
+    parser.add_argument(
+        "--redact",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run pattern-based redaction on bodies + metadata before writing (default: on)",
+    )
+    parser.add_argument(
+        "--allow-leakage",
+        action="store_true",
+        help="Write the split even if the post-redaction scan finds leaks. "
+             "Off by default — leakage aborts the write.",
+    )
+    parser.add_argument("--include_html", action="store_true", help="Also store raw storage HTML for debugging (incompatible with --redact)")
     parser.add_argument("--continue_on_error", action="store_true", help="Skip pages that fail to fetch")
     args = parser.parse_args()
 
@@ -246,15 +335,28 @@ def main() -> None:
         cloud=True,
     )
 
-    with open(args.input, encoding="utf-8") as f:
-        entries = json.load(f)
-    if not isinstance(entries, list) or not entries:
-        sys.exit(f"{args.input} must contain a non-empty JSON array")
+    if args.search_current_user_pages:
+        entries = _discover_current_user_pages(client, args.max_pages)
+        print(f"  discovered {len(entries)} pages authored by {confluence_user}")
+        if not entries:
+            sys.exit("No pages found for the authenticated user.")
+    else:
+        with open(args.input, encoding="utf-8") as f:
+            entries = json.load(f)
+        if not isinstance(entries, list) or not entries:
+            sys.exit(f"{args.input} must contain a non-empty JSON array")
+
+    redact_state = redact_mod.RedactionState() if args.redact else None
 
     items: list[dict] = []
     for entry in entries:
         try:
-            item = _build_item(confluence=client, entry=entry, include_html=args.include_html)
+            item = _build_item(
+                confluence=client,
+                entry=entry,
+                include_html=args.include_html,
+                redact_state=redact_state,
+            )
         except Exception as exc:  # noqa: BLE001
             if args.continue_on_error:
                 print(f"  [skip] {entry}: {exc}", file=sys.stderr)
@@ -268,6 +370,27 @@ def main() -> None:
 
     os.makedirs(args.out_dir, exist_ok=True)
     _write_split(args.out_dir, items, args.split_ratio, args.seed)
+
+    if redact_state is not None:
+        mapping_path = os.path.join(args.out_dir, "redaction_mapping.json")
+        with open(mapping_path, "w", encoding="utf-8") as f:
+            json.dump(redact_state.mapping, f, ensure_ascii=False, indent=2)
+        print(f"  wrote redaction mapping → {mapping_path}")
+
+        findings = _scan_split_for_leakage(args.out_dir)
+        if findings:
+            print("  [leakage] post-redaction scan found remaining identifiers:", file=sys.stderr)
+            for split_name, hits in findings.items():
+                preview = ", ".join(f"{name}={val!r}" for name, val in hits[:5])
+                print(f"    {split_name}: {len(hits)} hits — {preview}", file=sys.stderr)
+            if not args.allow_leakage:
+                sys.exit(
+                    "Aborting because the redaction scan found leaks. "
+                    "Inspect the items, extend scripts/redact.py, and re-run. "
+                    "Use --allow-leakage to override."
+                )
+        else:
+            print("  [leakage] post-redaction scan: clean")
 
 
 if __name__ == "__main__":
